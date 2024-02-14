@@ -1,0 +1,77 @@
+pip install asyncpg fastapi uvicorn sqlalchemy databases
+
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List
+from sqlalchemy import create_engine, Column, Integer, String, Float, MetaData, Table, select
+from databases import Database
+
+app = FastAPI()
+
+DATABASE_URL = "postgresql://username:password@localhost/weather_db"  # Replace  PostgreSQL connection string
+database = Database(DATABASE_URL)
+
+metadata = MetaData()
+weather = Table(
+    "weather",
+    metadata,
+    Column("id", Integer, primary_key=True, index=True),
+    Column("city", String, unique=True),
+    Column("current_temperature", Float),
+    Column("current_conditions", String),
+    Column("forecast_high", Float),
+    Column("forecast_low", Float),
+    Column("forecast_conditions", String),
+)
+
+engine = create_engine(DATABASE_URL)
+metadata.create_all(engine)
+
+class WeatherData(BaseModel):
+    city: str
+    current_temperature: float
+    current_conditions: str
+    forecast_high: float
+    forecast_low: float
+    forecast_conditions: str
+
+@app.on_event("startup")
+async def startup():
+    await database.connect()
+
+@app.on_event("shutdown")
+async def shutdown():
+    await database.disconnect()
+
+@app.post("/weather/", response_model=WeatherData)
+async def create_weather_data(weather_data: WeatherData):
+    query = weather.insert().values(
+        city=weather_data.city,
+        current_temperature=weather_data.current_temperature,
+        current_conditions=weather_data.current_conditions,
+        forecast_high=weather_data.forecast_high,
+        forecast_low=weather_data.forecast_low,
+        forecast_conditions=weather_data.forecast_conditions,
+    )
+    last_record_id = await database.execute(query)
+    return {**weather_data.dict(), "id": last_record_id}
+
+@app.get("/weather/{city}", response_model=WeatherData)
+async def get_weather_data(city: str):
+    query = select([weather]).where(weather.c.city == city)
+    row = await database.fetch_one(query)
+    if row is None:
+        raise HTTPException(status_code=404, detail="City not found")
+    return dict(row)
+
+@app.get("/weather/", response_model=List[WeatherData])
+async def get_all_weather_data(skip: int = 0, limit: int = 10):
+    query = weather.select().offset(skip).limit(limit)
+    rows = await database.fetch_all(query)
+    return [dict(row) for row in rows]
+
+
+#Run the application using the following command:
+uvicorn main:app --reload
+# app uses PostgreSQL as the data storage backend instead of SQLite
